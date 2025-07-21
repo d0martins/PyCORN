@@ -261,7 +261,7 @@ def get_chrom_logs(data_dictionary: PcUni6|dict, **kwargs) -> tuple[pd.DataFrame
 		print(f"processing \t{chrom_name}")
 		traces = kwargs.get('traces', list(data_dictionary[chrom_name].keys()))
 		 
-		df = get_df_from_data_dict(data_dictionary, chrom_name, traces).sort_index().dropna(how='all')
+		df = get_chrom_from_data_dict(data_dictionary, chrom_name, traces).sort_index().dropna(how='all')
 
 		df_logs = df.select_dtypes(exclude=['float64'])
 		df_logs.dropna(how='all', inplace=True)
