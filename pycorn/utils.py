@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from pycorn import PcUni6
-
+import xml.etree.ElementTree as ET
 
 def get_series_from_data_dict(data_dictionary, target_key, data_key_list):
     try:
