@@ -5,6 +5,7 @@ import pandas as pd
 
 from pycorn import PcUni6
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
 
 def get_series_from_data_dict(data_dictionary, target_key, data_key_list):
     try:
@@ -94,8 +95,81 @@ def import_xml_as_df(file_path: (str | Path), data_key_list: list = None, index:
 
     return dataframe
 
+def get_metadata(data_dictionary: PcUni6|dict )-> dict[str, str]:
+	"""
+	Extracts metadata from the XML data of a Unicorn result file.
+	must be called before get_chrom_logs because of the load_all_xm() method or any other function calling such method
+	'creation_date' can be represented with .strftime('%d/%m/%y %H:%M:%S %Z') method
 
-def get_df_from_data_dict(data_dictionary, chromatogram_str, traces_list) -> pd.DataFrame:
+	Inputs:
+		xml_data (PcUni6 or dict): Data structure containing loaded XML data from a Unicorn result file.
+
+	Outputs:
+		metadata (dict[str, str|datetime]): Dictionary containing extracted metadata fields:
+			- 'result_name': Name of the result file
+			- 'batch_ID': Batch ID associated with the result
+			- 'creation_date': Creation date and time incl. timezone offset
+			- 'system_name': Name of the system used for the run
+
+	Notes:
+		The function parses the XML content in xml_data['Result.xml'] and extracts relevant metadata fields.
+		If a field is not found, its value will be None or 'not found'.
+	"""
+    
+	# Parse the XML data from xml_data['Result.xml']
+	xml_data = data_dictionary
+	xml_data.load()
+	root = ET.fromstring(xml_data['Result.xml'])
+
+
+	# Find name
+	name_elem = root.find('.//Name')
+	result_name = name_elem.text if name_elem is not None else None
+
+	# Find batch-id
+	batch_id_elem = root.find('.//BatchId')
+	batch_id = batch_id_elem.text if batch_id_elem is not None else None
+
+
+	# Find creation date
+	created_elem = root.find('.//Created')
+	created_timestamp = created_elem.text if created_elem is not None else None
+	
+	utc_offset_elem = root.find('.//CreatedUtcOffsetMinutes')
+	utc_offset_minutes = int(utc_offset_elem.text) if utc_offset_elem is not None else 0
+
+	if created_timestamp:
+		dt = datetime.fromisoformat(created_timestamp)
+		# Apply UTC offset
+		dt = dt.replace(tzinfo=timezone(timedelta(minutes=utc_offset_minutes)))
+	else:
+		dt = 'not found'
+
+
+
+	# Find System Name
+	system_name_elem = root.find('.//SystemName')
+	system_name = system_name_elem.text if system_name_elem is not None else None
+
+	col_name = xml_data['ColumnTypeData']['Xml']['ColumnTypes']['ColumnType']['Name']
+
+	# print("Name: \t\t", result_name)
+	# pritn("Column: \t", col_name) 
+	# print("Created:\t", dt.strftime('%d/%m/%y %H:%M:%S %Z'))
+	# print("Batch ID:\t", batch_id)
+	# print("SystemName:\t", system_name)
+
+
+	metadata = {
+		'result_name': result_name,
+		'column': col_name,
+		'creation_date': dt,
+		'batch_ID': batch_id,
+		'system_name': system_name
+	}
+	return metadata
+
+def get_chrom_from_data_dict(data_dictionary: PcUni6|dict, chromatogram_str, traces_list) -> pd.DataFrame:
     """""
     extract the chormatogram data from a data_dictionary for a given chromatogram_str and traces_list
     works one chromatogram at a time
@@ -152,25 +226,24 @@ def get_df_from_data_dict(data_dictionary, chromatogram_str, traces_list) -> pd.
     df.columns = traces_list_new
     return df
 
-def get_chrom_logs(file_path: str, **kwargs) -> tuple[pd.DataFrame, pd.DataFrame]:
+def get_chrom_logs(data_dictionary: PcUni6|dict, **kwargs) -> tuple[pd.DataFrame, pd.DataFrame]:
 	"""
-	Extracts chromatogram and log data from a .zip file (Unicorn result) and returns two DataFrames: one for chromatograms and one for logs
+	Extracts chromatogram and log data from a dictionary containing Unicorn results with all chromatograms, as prepared by PcUni6(), and returns two DataFrames: one for chromatograms and one for logs
 	if no 'Injection' is provided in 'traces' (**kwargs), chromatogram will not be adjusted to the first injection, if no 'traces' is provided it will depended on if any injection was done
 
 	Inputs:
-		file_path (str): Path to the .zip file containing the chromatogram result file
+		data_dictionary (dict): dictionary containing Unicorn results with all chromatograms, as prepared by PcUni6()
 		kwargs (dict)
 		chromatograms (list[int]): list of chromatogram names to import. If not provided, all chromatograms will be used.
 		traces (list[str]): list of traces to import. If not provided, all traces will be used.
-		interpolate_threshold (int): to control interpolation behavior, chromatograms with less than this number of rows will not be interpolated.
+		interpolate_threshold (int): to control interpolation behavior, chromatograms with less rows than this will not be interpolated.
 	
 	Output:
 		chromatogram_df (pd.DataFrame): DataFrame containing all chromatograms with aligned data
 		log_df (pd.DataFrame):  DataFrame containing log data
 	"""
 
-	# Load the .zip file to data_dictionary
-	data_dictionary = PcUni6(file_path)
+	# Load all to data_dictionary
 	data_dictionary.load_all_xml()
 
 	# if 'chromatograms' list is not provided, all chromatograms from the data_dictionary will be used
@@ -228,75 +301,7 @@ def get_chrom_logs(file_path: str, **kwargs) -> tuple[pd.DataFrame, pd.DataFrame
 	
 	chromatogram_df.sort_index(inplace=True)
 	log_df.sort_index(inplace=True)
-	
+
 	return chromatogram_df, log_df
 
-def get_metadata(xml_data: PcUni6|dict )-> dict[str, str]:
-	"""
-	Extracts metadata from the XML data of a Unicorn result file.
 
-	Inputs:
-		xml_data (PcUni6 or dict): Data structure containing loaded XML data from a Unicorn result file.
-
-	Outputs:
-		metadata (dict[str, str]): Dictionary containing extracted metadata fields:
-			- 'result_name': Name of the result file
-			- 'batch_ID': Batch ID associated with the result
-			- 'creation_date': Creation date and time (formatted string with timezone)
-			- 'system_name': Name of the system used for the run
-
-	Notes:
-		The function parses the XML content in xml_data['Result.xml'] and extracts relevant metadata fields.
-		If a field is not found, its value will be None or 'not found'.
-	"""
-    
-	# Parse the XML data from xml_data['Result.xml']
-	root = ET.fromstring(xml_data['Result.xml'])
-
-
-	# Find name
-	name_elem = root.find('.//Name')
-	result_name = name_elem.text if name_elem is not None else None
-
-	# Find batch-id
-	batch_id_elem = root.find('.//BatchId')
-	batch_id = batch_id_elem.text if batch_id_elem is not None else None
-
-
-	# Find creation date
-	created_elem = root.find('.//Created')
-	created_timestamp = created_elem.text if created_elem is not None else None
-	
-	utc_offset_elem = root.find('.//CreatedUtcOffsetMinutes')
-	utc_offset_minutes = int(utc_offset_elem.text) if utc_offset_elem is not None else 0
-
-	if created_timestamp:
-		dt = datetime.fromisoformat(created_timestamp)
-		# Apply UTC offset
-		dt = dt.replace(tzinfo=timezone(timedelta(minutes=utc_offset_minutes)))
-	else:
-		dt = 'not found'
-
-
-
-	# Find System Name
-	system_name_elem = root.find('.//SystemName')
-	system_name = system_name_elem.text if system_name_elem is not None else None
-
-	col_name = xml_data['ColumnTypeData']['Xml']['ColumnTypes']['ColumnType']['Name']
-
-	# print("Name: \t\t", result_name)
-	# pritn("Column: \t", col_name) 
-	# print("Created:\t", dt.strftime('%d/%m/%y %H:%M:%S %Z'))
-	# print("Batch ID:\t", batch_id)
-	# print("SystemName:\t", system_name)
-
-
-	metadata = {
-		'result_name': result_name,
-		'column': col_name,
-		'creation_date': dt.strftime('%d/%m/%y %H:%M:%S %Z'),
-		'batch_ID': batch_id,
-		'system_name': system_name
-	}
-	return metadata
