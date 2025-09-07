@@ -7,6 +7,8 @@ from pycorn import PcUni6
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 
+from math import pi
+
 def get_series_from_data_dict(data_dictionary, target_key, data_key_list):
     try:
         # select the first injection as the injection timestamp
@@ -98,7 +100,7 @@ def import_xml_as_df(file_path: (str | Path), data_key_list: list = None, index:
 def get_metadata(data_dictionary: PcUni6|dict )-> dict[str, str]:
 	"""
 	Extracts metadata from the XML data of a Unicorn result file.
-	must be called before get_chrom_logs because of the load_all_xm() method or any other function calling such method
+	must be called before get_chrom (because of the load_all_xm() method) or before any other function calling such method
 	'creation_date' can be represented with .strftime('%d/%m/%y %H:%M:%S %Z') method
 
 	Inputs:
@@ -107,8 +109,12 @@ def get_metadata(data_dictionary: PcUni6|dict )-> dict[str, str]:
 	Outputs:
 		metadata (dict[str, str|datetime]): Dictionary containing extracted metadata fields:
 			- 'result_name': Name of the result file
-			- 'batch_ID': Batch ID associated with the result
+			- 'column': column name as saved in Unicorn column list
+			- 'column_bed_height_cm': as saved in Unicorn column list
+ 			- 'column_diameter_cm': as saved in Unicorn column list
+ 			- 'column_volume_mL': as saved in Unicorn column list
 			- 'creation_date': Creation date and time incl. timezone offset
+			- 'batch_ID': Batch ID associated with the result
 			- 'system_name': Name of the system used for the run
 
 	Notes:
@@ -150,8 +156,32 @@ def get_metadata(data_dictionary: PcUni6|dict )-> dict[str, str]:
 	# Find System Name
 	system_name_elem = root.find('.//SystemName')
 	system_name = system_name_elem.text if system_name_elem is not None else None
-
-	col_name = xml_data['ColumnTypeData']['Xml']['ColumnTypes']['ColumnType']['Name']
+	
+	# Find column data if available
+	if (xml_data['ColumnTypeData']['Xml'] is not None) and ("ColumnType" in xml_data['ColumnTypeData']["Xml"]["ColumnTypes"].keys()):
+		# for runs started in manual mode the xml_data['ColumnTypeData']['Xml'] is empyt (None)
+		# for runs started by a method the xml_data['ColumnTypeData']['Xml'] exists with the xml-schema only and
+		# nothing else, therefore the additional test is needed for method runs without column information
+		col_name = xml_data['ColumnTypeData']['Xml']['ColumnTypes']['ColumnType']['Name']
+		col_bed_height_unit = str(xml_data['ColumnTypeData']["Xml"]["ColumnTypes"]["ColumnType"]["BedHeightUnit"])
+		col_bed_height_key = "column_bed_height_" + col_bed_height_unit
+		col_bed_height = float(xml_data['ColumnTypeData']["Xml"]["ColumnTypes"]["ColumnType"]["BedHeight"])
+		col_diameter_unit = str(xml_data['ColumnTypeData']["Xml"]["ColumnTypes"]["ColumnType"]["Hardware"]["DiameterUnit"])
+		col_diameter_key = "column_diamter_" + col_diameter_unit
+		col_diameter = float(xml_data['ColumnTypeData']["Xml"]["ColumnTypes"]["ColumnType"]["Hardware"]["Diameter"])
+		if col_bed_height_unit.lower() == "cm" and col_diameter_unit.lower() == "cm":
+			col_volume_key = "column_volume_mL"
+		else:
+			col_volume_key = "column_volume_" + col_bed_height_unit + "*" +  col_diameter_unit + "^2"
+		col_volume = round(pi * (col_diameter/2)**2 * col_bed_height, 4)
+	else:
+		col_name = None
+		col_bed_height_key = "column_bed_height"
+		col_bed_height = None
+		col_diameter_key = "column_diameter"
+		col_diameter = None
+		col_volume_key = "column_volume"
+		col_volume = None
 
 	# print("Name: \t\t", result_name)
 	# pritn("Column: \t", col_name) 
@@ -163,6 +193,9 @@ def get_metadata(data_dictionary: PcUni6|dict )-> dict[str, str]:
 	metadata = {
 		'result_name': result_name,
 		'column': col_name,
+		col_bed_height_key: col_bed_height,
+		col_diameter_key: col_diameter,
+		col_volume_key: col_volume,
 		'creation_date': dt,
 		'batch_ID': batch_id,
 		'system_name': system_name
@@ -197,7 +230,7 @@ def get_chrom_from_data_dict(data_dictionary: PcUni6|dict, chromatogram_str, tra
         data_array = np.array(data_dictionary[chromatogram_str][data_key]["data"])
         if data_array.size == 0:
             x_data, y_data = np.array([np.nan]), np.array([np.nan])
-        else: 
+        else:
             x_data = data_array[:, 0].astype(float)
             y_data = data_array[:, 1]
         # data_series = pd.Series(data=y_data, index=x_data)
@@ -207,6 +240,7 @@ def get_chrom_from_data_dict(data_dictionary: PcUni6|dict, chromatogram_str, tra
             data_series = pd.Series(data=y_data, index=x_data, dtype=pd.StringDtype())
         # remove duplicates
         data_series = data_series[~data_series.index.duplicated()]
+        
         # offset by the injection_timestamp
         data_series.index -= inject_timestamp
 
@@ -216,9 +250,9 @@ def get_chrom_from_data_dict(data_dictionary: PcUni6|dict, chromatogram_str, tra
 
         data_series_list.append(data_series)
 
-    try: # case where only one trace (besides "Injection") is present
+    try: 
         df = pd.concat(data_series_list, axis=1)
-    except ValueError:
+    except ValueError: # case where only one trace (besides "Injection") is present
         pass
     
 	# removes all all elems of 'traces_not_in_chromatogram' from 'traces_list' in case-insensitive manner
@@ -226,13 +260,14 @@ def get_chrom_from_data_dict(data_dictionary: PcUni6|dict, chromatogram_str, tra
     df.columns = traces_list_new
     return df
 
-def get_chrom_logs(data_dictionary: PcUni6|dict, **kwargs) -> tuple[pd.DataFrame, pd.DataFrame]:
+def get_chrom(data_dictionary: PcUni6|dict, reduce_interpolate: bool = False, **kwargs) -> tuple[pd.DataFrame, pd.DataFrame]:
 	"""
-	Extracts chromatogram and log data from a dictionary containing Unicorn results with all chromatograms, as prepared by PcUni6(), and returns two DataFrames: one for chromatograms and one for logs
-	if no 'Injection' is provided in 'traces' (**kwargs), chromatogram will not be adjusted to the first injection, if no 'traces' is provided it will depended on if any injection was done
+	Extracts chromatogram from a dictionary containing Unicorn results with multiple chromatograms, as prepared by PcUni6(), and returns two DataFrame: one with consolidated data from chromatogram(s) and one with the logs of fractions and injection(s)
+	if no 'Injection' is provided in 'traces' (**kwargs), chromatogram will not be adjusted to the first injection, if no 'traces' is provided it will depended on if a 'Injection' trace exist (i.e. injection was done)
 
 	Inputs:
 		data_dictionary (dict): dictionary containing Unicorn results with all chromatograms, as prepared by PcUni6()
+		reduce_interpolate (bool): False by default, whether to reduce/interpolate the data to a frequency equal to the mean of the trace frequency (see note below)
 		kwargs (dict)
 		chromatograms (list[int]): list of chromatogram names to import. If not provided, all chromatograms will be used.
 		traces (list[str]): list of traces to import. If not provided, all traces will be used.
@@ -240,7 +275,7 @@ def get_chrom_logs(data_dictionary: PcUni6|dict, **kwargs) -> tuple[pd.DataFrame
 	
 	Output:
 		chromatogram_df (pd.DataFrame): DataFrame containing all chromatograms with aligned data
-		log_df (pd.DataFrame):  DataFrame containing log data
+		frac_log_df (pd.DataFrame):  DataFrame containing the fractions (and injection(s)) logs
 	"""
 
 	# Load all to data_dictionary
@@ -249,7 +284,7 @@ def get_chrom_logs(data_dictionary: PcUni6|dict, **kwargs) -> tuple[pd.DataFrame
 	# if 'chromatograms' list is not provided, all chromatograms from the data_dictionary will be used
 	chromatograms: list[int] = kwargs.get('chromatograms', [key for key in list(data_dictionary.keys()) if not key.lower().endswith('.xml_dict')])
 	# Threshold for interpolation, can be adjusted, chromatograms with less than this number of rows will not be interpolated
-	interpolate_threshold: int = kwargs.get('interpolate_threshold',10)
+	interpolate_threshold: int = kwargs.get('interpolate_threshold', 10)
 
 	# Initialize empty DataFrames and lists to store chromatogram and log data
 	chromatogram_df: pd.DataFrame = pd.DataFrame()
@@ -258,8 +293,9 @@ def get_chrom_logs(data_dictionary: PcUni6|dict, **kwargs) -> tuple[pd.DataFrame
 	log_dfs_list: list = []
 		
 	for chrom_name in chromatograms:
-		print(f"processing \t{chrom_name}")
+		#print(f"processing \t{chrom_name}")
 		traces = kwargs.get('traces', list(data_dictionary[chrom_name].keys()))
+		traces = [trace for trace in traces if trace.lower() not in "Run Log".lower()]
 		 
 		df = get_chrom_from_data_dict(data_dictionary, chrom_name, traces).sort_index().dropna(how='all')
 
@@ -269,20 +305,20 @@ def get_chrom_logs(data_dictionary: PcUni6|dict, **kwargs) -> tuple[pd.DataFrame
 
 		df = df.select_dtypes(include=['float64'])
 
-		# interpolate to allign all y-values (chromatograms) to the same x-values (mL coordinates)
-		if df.shape[0] > interpolate_threshold:
-			df.count(axis=0).median()  # Count non-NA/null observations in each column
+		if reduce_interpolate: # interpolate to allign all y-values (chromatograms) to the same x-values (mL coordinates)
+			if df.shape[0] > interpolate_threshold:
+				df.count(axis=0).median()  # Count non-NA/null observations in each column
 
-			# Generate new index with median df index length, preserving min and max of original df index
-			new_index = np.linspace(df.index.min(), df.index.max(), int(df.count(axis=0).median()))
+				# Generate new index with median df index length, preserving min and max of original df index
+				new_index = np.linspace(df.index.min(), df.index.max(), int(df.count(axis=0).median()))
 
-			# Interpolate all columns to the new index (merge two indexes, interpolate the resuling missing values, select only the new index)
-			df_interpolated = df.reindex(df.index.union(new_index)).interpolate(method='index').loc[new_index]
+				# Interpolate all columns to the new index (merge two indexes, interpolate the resuling missing values, select only the new index)
+				df_interpolated = df.reindex(df.index.union(new_index)).interpolate(method='index').loc[new_index]
 
-			# Set the index name to match the original if needed
-			df_interpolated.index.name = df.index.name
-		else:
-			df_interpolated = df.copy()
+				# Set the index name to match the original if needed
+				df_interpolated.index.name = df.index.name
+		
+		df_interpolated = df.copy()
 
 		# append the DataFrames to the respective lists for later concatenation
 		log_dfs_list.append(df_logs)
@@ -300,8 +336,107 @@ def get_chrom_logs(data_dictionary: PcUni6|dict, **kwargs) -> tuple[pd.DataFrame
 		log_df.index = log_df.index - first_injection_idx
 	
 	chromatogram_df.sort_index(inplace=True)
-	log_df.sort_index(inplace=True)
+	frac_log_df = log_df.sort_index().copy()
 
-	return chromatogram_df, log_df
+	return chromatogram_df, frac_log_df
 
+
+def get_full_log(data_dictionary: PcUni6|dict) -> pd.DataFrame:
+	"""
+	extract the full log
+	
+	Inputs:
+		data_dictionary (dict): dictionary containing Unicorn results with all chromatograms, as prepared by PcUni6()
+	Outputs:
+		full_log (pd.DataFrame): df with the full log
+
+	"""
+	chromatograms: list[int] = [key for key in list(data_dictionary.keys()) if key.lower().endswith('.xml_dict')]
+	frames = []
+	injection = None  # initialize injection variable
+	for chrom in chromatograms:
+		xml_chrom = data_dictionary[chrom]
+		events = xml_chrom["Chromatogram"]["EventCurves"]["EventCurve"]
+		if isinstance(events, dict):
+			if events["@EventCurveType"] == "Logbook":
+				log = events["Events"]["Event"]
+				partial_log = pd.DataFrame.from_records(log)
+		elif isinstance(events, list):
+			for event_curve in events:
+				if event_curve['@EventCurveType'] == "Logbook":
+					log = event_curve["Events"]["Event"]
+					partial_log = pd.DataFrame.from_records(log)
+					break  # stop after first Logbook found
+			else:
+				continue  # no Logbook found in this list
+		else:
+			raise TypeError(f"'dict' or 'list' type expected at xml_data['{chrom}']['Chromatogram']['EventCurves']['EventCurve']")
+
+		frames.append(partial_log.astype({"EventTime": "float", "EventVolume": "float"}))
+
+		# get injection points, try to find in the current chromatogram if exists
+		try:
+			for event in data_dictionary[chrom]["Chromatogram"]["EventCurves"]["EventCurve"]:
+				if event["@EventCurveType"] == "Injection":
+					event_entry = event["Events"]["Event"]
+
+					if isinstance(event_entry, dict):
+						injection = {
+							"volume_ml": float(event_entry["EventVolume"]),
+							"time_min": float(event_entry["EventTime"])
+						}
+					elif isinstance(event_entry, list):
+						# selects the first injection done
+						injection = {
+							"volume_ml": float(event_entry[0]["EventVolume"]),
+							"time_min": float(event_entry[0]["EventTime"])
+						}
+		except (TypeError, KeyError):
+			# no injection found in this chromatogram
+			pass
+
+	full_log = pd.concat(frames)
+	full_log.columns = [col.replace("@", "") for col in full_log.columns]
+	full_log.sort_values(by="EventTime", inplace=True, ignore_index=True)
+	full_log['EventFullText'] = full_log[["EventType", "EventSubType", "EventText"]].apply(lambda row: ' '.join(row.astype(str)), axis=1)
+	full_log = full_log[["EventVolume", "EventTime", "EventType", "EventSubType", "EventText", "InstructionFeedback", "EventFullText"]]
+
+	# sets injection to 0, should no inject be found
+	if injection is None:
+		injection = {
+			"volume_ml": 0.0,
+			"time_min": 0.0
+		}
+
+	full_log["EventTime"] = full_log["EventTime"] - injection["time_min"]
+	full_log["EventVolume"] = full_log["EventVolume"] - injection["volume_ml"]
+
+	return full_log
+
+
+def get_frac_vol(log_df: pd.DataFrame)-> pd.DataFrame:
+	"""
+	calculate fraction volume from 'log_df' (short version)
+	
+	Inputs:
+		log_df (pd.DataFrame): df with fraction names and volume coordinates as prepared by _, log_df=get_chrom_logs() from pycorn.utils
+	
+	Outputs:
+		frac_vol_df (pd.DataFrame): df with only fractions, their volume and start point (=log_df.index)
+	"""
+
+	df = log_df.copy()
+
+	df.dropna(subset = "Fractions", inplace= True)
+	df["frac_start_volume_ml"] = df.index
+	# df.reset_index(inplace=True)
+	df["fraction_volume"] = - df["frac_start_volume_ml"].diff(periods = -1) # "Fractions" marks the beginning of the fractio therefore negative and period = -1 (difference to following line) is needed
+
+	# updated_log_df = pd.merge(log_df.copy(), df["fraction_volume"], how = "outer",left_index=True, right_index=True) # merge with orgininal
+
+	df.drop(df[df["Fractions"].str.contains("Waste|Frac", case=False)].index, inplace=True) # drops lines with 'frac' or 'waste' as fraction name
+
+	frac_vol_df = df[["frac_start_volume_ml", "Fractions", "fraction_volume"]]
+
+	return frac_vol_df
 
