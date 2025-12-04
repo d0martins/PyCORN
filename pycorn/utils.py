@@ -275,6 +275,7 @@ def get_chrom(data_dictionary: PcUni6|dict, reduce_interpolate: bool = False, **
 		chromatograms (list[int]): list of chromatogram names to import. If not provided, all chromatograms will be used.
 		traces (list[str]): list of traces to import. If not provided, all traces will be used.
 		interpolate_threshold (int): to control interpolation behavior, chromatograms with less rows than this will not be interpolated.
+        which_injection (int): which injection mark to use (0-indexed injection mark, -1 for last), default is first injeciton mark
 	
 	Output:
 		chromatogram_df (pd.DataFrame): DataFrame containing all chromatograms with aligned data
@@ -314,7 +315,7 @@ def get_chrom(data_dictionary: PcUni6|dict, reduce_interpolate: bool = False, **
 
 				# Generate new index with median df index length, preserving min and max of original df index
 				new_index = np.linspace(df.index.min(), df.index.max(), int(df.count(axis=0).median()))
-
+				
 				# Interpolate all columns to the new index (merge two indexes, interpolate the resuling missing values, select only the new index)
 				df_interpolated = df.reindex(df.index.union(new_index)).interpolate(method='index').loc[new_index]
 
@@ -326,30 +327,28 @@ def get_chrom(data_dictionary: PcUni6|dict, reduce_interpolate: bool = False, **
 		# append the DataFrames to the respective lists for later concatenation
 		log_dfs_list.append(df_logs)
 		chrom_dfs_list.append(df_interpolated)
-		
-
-	#merge all chromatograms and logs into respective DataFrames
-	chromatogram_df = pd.concat(chrom_dfs_list, axis=0)
+	chromatogram_df = pd.concat(chrom_dfs_list, axis=0) #merge all chromatograms and logs into respective DataFrames
 	log_df = pd.concat(log_dfs_list, axis=0)
-
+	
 	if "Injection" in traces:
-	# find first injection and reajust the index
-		first_injection_idx = log_df['Injection'][log_df['Injection'] == True].index.min()
-		chromatogram_df.index = chromatogram_df.index - first_injection_idx
-		log_df.index = log_df.index - first_injection_idx
+		injection_selected = int(kwargs.get('which_injection', 0)) # find first injection and reajust the index    
+		injection_idx = log_df['Injection'][log_df['Injection'] == True].index[injection_selected]
+		chromatogram_df.index = chromatogram_df.index - injection_idx
+		log_df.index = log_df.index - injection_idx
 	
 	chromatogram_df.sort_index(inplace=True)
 	frac_log_df = log_df.sort_index().copy()
-
 	return chromatogram_df, frac_log_df
 
 
-def get_full_log(data_dictionary: PcUni6|dict) -> pd.DataFrame:
+def get_full_log(data_dictionary: PcUni6|dict, **kwargs) -> pd.DataFrame:
 	"""
 	extract the full log
 	
 	Inputs:
 		data_dictionary (dict): dictionary containing Unicorn results with all chromatograms, as prepared by PcUni6()
+        kwargs (dict)
+        which_injection (int): which injection mark to use (0-indexed injection mark, -1 for last), default is first injeciton mark
 	Outputs:
 		full_log (pd.DataFrame): df with the full log
 
@@ -387,9 +386,10 @@ def get_full_log(data_dictionary: PcUni6|dict) -> pd.DataFrame:
 							"time_min" : float(event_entry["EventTime"])}
 					elif isinstance(event_entry, list):
 						# selects the first injection done
+						injection_selected = int(kwargs.get("which_injection", 0))
 						injection = {
-							"volume_ml" : float(event_entry[0]["EventVolume"]),
-							"time_min" : float(event_entry[0]["EventTime"])}
+							"volume_ml" : float(event_entry[injection_selected]["EventVolume"]),
+							"time_min" : float(event_entry[injection_selected]["EventTime"])}
 		except TypeError:
 			# print(f"no injectin found in {chrom}")
 			pass
