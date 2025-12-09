@@ -1,13 +1,20 @@
+#standard library
+from collections.abc import Sequence
 from pathlib import Path
-
-import numpy as np
-import pandas as pd
-
-from pycorn import PcUni6
-import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
-
 from math import pi
+
+# third-party
+from pycorn.utils import get_between_logs
+from pycorn import PcUni6
+import pandas as pd
+import numpy as np
+import xml.etree.ElementTree as ET
+
+# local
+from aktachromatogram.model_dataclass import Result, ResultBatch
+
+
 
 def get_series_from_data_dict(data_dictionary, target_key, data_key_list):
     try:
@@ -553,3 +560,181 @@ def get_start_end_frac(dfm: pd.DataFrame, chrom_data_dict: dict, expid: str, par
 		start_end_frac = union_frac_series.iloc[[0,-1]]
 
 	return start_end_frac
+
+
+def extract_trace_series(
+    *,
+    batch: ResultBatch | None = None,
+    results: Sequence[Result] | None = None,
+    trace_key: str = "DeltaC pressure",
+    start_end_text: Sequence[str] | None = None,
+    top_cycle_cutoff: int | None = None
+) -> pd.Series:
+    """
+    Extract a trace (e.g., pressure, UV, ...) from multiple chromatography cycles
+    and return as a Series indexed by cycle_count.
+    
+    Each value in the Series contains the full trace data (as pd.Series) for that cycle.
+
+    Parameters
+    ----------
+    batch : ResultBatch, optional
+        A ResultBatch instance with sorted results. Mutually exclusive with `results`.
+
+    results : list[Result], optional
+        A filtered list of Result instances. Mutually exclusive with `batch`.
+
+    trace_key : str, default="DeltaC pressure"
+        The chromatogram trace to extract.
+
+    start_end_text : list[str], optional
+        Custom start and end event markers to extract trace segment.
+        If None, uses the full chromatogram.
+
+    top_cycle_cutoff : int, optional
+        Max number of cycles to process. Defaults to all.
+
+    Returns
+    -------
+    pd.Series
+        Series indexed by cycle_count, where each value is a pd.Series containing
+        the trace data for that cycle.
+        
+    Examples
+    --------
+    >>> traces = extract_trace_series(
+    ...     batch=batch,
+    ...     trace_key="DeltaC pressure",
+    ...     start_end_text=["BlockStart Block Direct sample injection_1", "(Column Wash)"]
+    ... )
+    >>> # Access trace for cycle 5
+    >>> cycle_5_pressure = traces[5]
+    >>> # Get median for cycle 5
+    >>> median_5 = traces[5].median()
+    """
+    if (batch is None and results is None) or (batch and results):
+        raise ValueError("Provide either 'batch' or 'results', but not both.")
+
+    if results is None:
+        results = batch.results
+
+    if top_cycle_cutoff:
+        results = results[:top_cycle_cutoff]
+
+    trace_data = {}
+
+    for result in results:
+        try:
+            chrom_full = result.chrom
+            full_log = result.full_log
+
+            if start_end_text is not None:
+                edges = get_between_logs(full_log, start_end_text)
+                chrom = chrom_full.loc[slice(*edges)]
+            else:
+                chrom = chrom_full
+
+            df_cycle = chrom.loc[:, trace_key].dropna()
+            
+            if len(df_cycle) > 0:
+                trace_data[result.cycle_count] = df_cycle
+
+        except Exception as e:
+            print(f"[{result.cycle_count}] Error extracting trace: {e}")
+            continue
+
+    return pd.Series(trace_data, name=trace_key)
+
+
+
+def interpolate_to_column(
+    df: pd.DataFrame,
+    source_col: str,
+    target_col: str,
+    new_col: str | None = None,
+    method: str = 'linear',
+    fill_value: float | str = np.nan
+) -> pd.Series | pd.DataFrame:
+    """
+    Interpolate source_col values to align with the non-NaN indices of target_col.
+    
+    This is useful when two measurement columns have data at different time points
+    (misaligned indices) and you need to align them for mathematical operations.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input dataframe with misaligned columns.
+    source_col : str
+        The column to interpolate (e.g., "Sample flow").
+    target_col : str
+        The column whose non-NaN indices define the output alignment (e.g., "DeltaC pressure").
+    new_col : str, optional
+        If provided, adds the interpolated values as a new column to the dataframe
+        and returns the modified dataframe. If None, returns only the interpolated Series.
+    method : str, default='linear'
+        Interpolation method. Options: 'linear', 'nearest', 'cubic', etc.
+    fill_value : float or str, default=np.nan
+        How to handle extrapolation beyond the source data range.
+        - np.nan: use NaN for out-of-bounds values
+        - 'extrapolate': extend the interpolation beyond bounds
+        - float: use a specific fill value
+    
+    Returns
+    -------
+    pd.Series or pd.DataFrame
+        If new_col is None: returns interpolated Series aligned to target_col's non-NaN index.
+        If new_col is provided: returns DataFrame with new column added.
+    
+    Examples
+    --------
+    >>> # Get interpolated series
+    >>> flow_aligned = interpolate_to_column(df, "Sample flow", "DeltaC pressure")
+    >>> 
+    >>> # Add as new column
+    >>> df = interpolate_to_column(df, "Sample flow", "DeltaC pressure", new_col="Sample flow (aligned)")
+    >>> 
+    >>> # Use for calculations
+    >>> flow_interp = interpolate_to_column(df, "Sample flow", "DeltaC pressure")
+    >>> df["pressure_per_flow"] = df["DeltaC pressure"].dropna() / flow_interp
+    """
+    # Get non-NaN indices from target column
+    target_index = df[target_col].dropna().index.values
+    
+    # Get source data (drop NaN)
+    source_series = df[source_col].dropna()
+    source_index = source_series.index.values
+    source_values = source_series.values
+    
+    # Interpolate source values to target indices
+    if method == 'linear':
+        # Handle fill_value for np.interp
+        if fill_value == 'extrapolate':
+            # np.interp extrapolates by default at boundaries
+            interpolated = np.interp(target_index, source_index, source_values)
+        else:
+            interpolated = np.interp(target_index, source_index, source_values)
+            # Mask values outside source range
+            out_of_bounds = (target_index < source_index.min()) | (target_index > source_index.max())
+            if isinstance(fill_value, (int, float)):
+                interpolated[out_of_bounds] = fill_value
+            else:  # np.nan or other
+                interpolated[out_of_bounds] = np.nan
+    else:
+        # Use scipy for other interpolation methods
+        from scipy.interpolate import interp1d
+        f = interp1d(source_index, source_values, kind=method, 
+                     bounds_error=False, fill_value=fill_value)
+        interpolated = f(target_index)
+    
+    # Create output series
+    result_series = pd.Series(interpolated, index=target_index, name=source_col)
+    
+    if new_col is not None:
+        # Add as new column to dataframe
+        df = df.copy()
+        df[new_col] = np.nan
+        df.loc[target_index, new_col] = interpolated
+        return df
+    else:
+        return result_series
