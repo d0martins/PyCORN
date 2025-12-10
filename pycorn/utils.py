@@ -10,11 +10,6 @@ import pandas as pd
 import numpy as np
 import xml.etree.ElementTree as ET
 
-# local
-from aktachromatogram.model_dataclass import Result, ResultBatch
-
-
-
 def get_series_from_data_dict(data_dictionary, target_key, data_key_list):
     try:
         # select the first injection as the injection timestamp
