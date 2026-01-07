@@ -490,17 +490,24 @@ def get_between_logs(full_log_df: pd.DataFrame, start_end_text: list[str], looku
     return edges
 
 
-def get_fracs_between_logs(full_log_df: pd.DataFrame, frac_df: pd.DataFrame, start_end_text:list[str]):
+def get_fracs_between_logs(full_log_df: pd.DataFrame, frac_df: pd.DataFrame, start_end_text:list[str], match_mode: str | list[str] = "closest"):
 	"""
 	gets first and last fraction between two log events ("EventFullText" column)
-	
+
 	Parameters
 	---------
 	full_log_df : pd.DataFrame
 		run log; must contain columns ["EventFullText", "EventVolume"]
 	frac_df : pd.DataFrame
 		fraction table; must contain columns ["frac_start_volume_ml"]
-	
+	match_mode : str or list[str], default "closest"
+		Matching strategy for finding fractions. Options:
+		- "closest": nearest fraction (minimum absolute distance) for both start and end
+		- "next": fraction at or after the target volume (for both start and end)
+		- "previous": fraction at or before the target volume (for both start and end)
+		- list of two strings: [start_mode, end_mode] to specify different modes for start and end
+		  Example: ["next", "previous"] = fraction after start, fraction before end
+
 	Returns
 	-------
 	log_frac_series : pd.Series
@@ -508,9 +515,43 @@ def get_fracs_between_logs(full_log_df: pd.DataFrame, frac_df: pd.DataFrame, sta
 
 	"""
 	edges = get_between_logs(full_log_df, start_end_text)
-	print(edges)
-	closest_indices = [(frac_df["frac_start_volume_ml"] - target).abs().idxmin() for target in edges] # computes the absolute distance between each row and the target, gets the index of the smallest distance (i.e., the closest match)
-	print(closest_indices)
+	# print(f"{edges=}")
+
+	# Handle match_mode as string or list
+	if isinstance(match_mode, str):
+		modes = [match_mode, match_mode]
+	elif isinstance(match_mode, list) and len(match_mode) == 2:
+		modes = match_mode
+	else:
+		raise ValueError("match_mode must be a string or a list of two strings")
+
+	closest_indices = []
+	for target, mode in zip(edges, modes):
+		if mode == "closest":
+			# Original behavior: minimum absolute distance
+			idx = (frac_df["frac_start_volume_ml"] - target).abs().idxmin()
+		elif mode == "next":
+			# Fraction at or after the target volume
+			candidates = frac_df[frac_df["frac_start_volume_ml"] >= target]
+			if candidates.empty:
+				# If no fraction after, fall back to the last fraction
+				idx = frac_df.index[-1]
+			else:
+				idx = candidates["frac_start_volume_ml"].idxmin()
+		elif mode == "previous":
+			# Fraction at or before the target volume
+			candidates = frac_df[frac_df["frac_start_volume_ml"] <= target]
+			if candidates.empty:
+				# If no fraction before, fall back to the first fraction
+				idx = frac_df.index[0]
+			else:
+				idx = candidates["frac_start_volume_ml"].idxmax()
+		else:
+			raise ValueError(f"Invalid match_mode: {mode}. Must be 'closest', 'next', or 'previous'")
+
+		closest_indices.append(idx)
+
+	# print(f"{closest_indices=}")
 	log_frac_series = frac_df.loc[closest_indices[0]:closest_indices[1], "Fractions"].str.replace(".", "")
 	return log_frac_series
 
@@ -568,8 +609,7 @@ def extract_trace_series(
     results: Sequence[Result] | None = None,
     trace_key: str = "DeltaC pressure",
     start_end_text: Sequence[str] | None = None,
-    top_cycle_cutoff: int | None = None
-) -> pd.Series:
+    top_cycle_cutoff: int | None = None) -> pd.Series:
     """
     Extract a trace (e.g., pressure, UV, ...) from multiple chromatography cycles
     and return as a Series indexed by cycle_count.
@@ -645,16 +685,13 @@ def extract_trace_series(
 
     return pd.Series(trace_data, name=trace_key)
 
-
-
 def interpolate_to_column(
     df: pd.DataFrame,
     source_col: str,
     target_col: str,
     new_col: str | None = None,
     method: str = 'linear',
-    fill_value: float | str = np.nan
-) -> pd.Series | pd.DataFrame:
+    fill_value: float | str = np.nan) -> pd.Series | pd.DataFrame:
     """
     Interpolate source_col values to align with the non-NaN indices of target_col.
     
@@ -738,3 +775,10 @@ def interpolate_to_column(
         return df
     else:
         return result_series
+
+Add flexible matching modes to get_fracs_between_logs function
+
+Introduce match_mode parameter supporting "closest", "next", and "previous"
+strategies for matching fractions to log events. The parameter accepts both
+a single mode string (applies to both start and end) or a list of two modes
+(different modes for start and end). Also remove debug print statements.
