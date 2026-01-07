@@ -1,20 +1,13 @@
 #standard library
-from collections.abc import Sequence
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from math import pi
 
 # third-party
-from pycorn.utils import get_between_logs
 from pycorn import PcUni6
 import pandas as pd
 import numpy as np
 import xml.etree.ElementTree as ET
-
-# local
-from aktachromatogram.model_dataclass import Result, ResultBatch
-
-
 
 def get_series_from_data_dict(data_dictionary, target_key, data_key_list):
     try:
@@ -613,7 +606,7 @@ def extract_trace_series(
     """
     Extract a trace (e.g., pressure, UV, ...) from multiple chromatography cycles
     and return as a Series indexed by cycle_count.
-    
+
     Each value in the Series contains the full trace data (as pd.Series) for that cycle.
 
     Parameters
@@ -639,7 +632,7 @@ def extract_trace_series(
     pd.Series
         Series indexed by cycle_count, where each value is a pd.Series containing
         the trace data for that cycle.
-        
+
     Examples
     --------
     >>> traces = extract_trace_series(
@@ -675,7 +668,7 @@ def extract_trace_series(
                 chrom = chrom_full
 
             df_cycle = chrom.loc[:, trace_key].dropna()
-            
+
             if len(df_cycle) > 0:
                 trace_data[result.cycle_count] = df_cycle
 
@@ -694,10 +687,10 @@ def interpolate_to_column(
     fill_value: float | str = np.nan) -> pd.Series | pd.DataFrame:
     """
     Interpolate source_col values to align with the non-NaN indices of target_col.
-    
+
     This is useful when two measurement columns have data at different time points
     (misaligned indices) and you need to align them for mathematical operations.
-    
+
     Parameters
     ----------
     df : pd.DataFrame
@@ -716,33 +709,33 @@ def interpolate_to_column(
         - np.nan: use NaN for out-of-bounds values
         - 'extrapolate': extend the interpolation beyond bounds
         - float: use a specific fill value
-    
+
     Returns
     -------
     pd.Series or pd.DataFrame
         If new_col is None: returns interpolated Series aligned to target_col's non-NaN index.
         If new_col is provided: returns DataFrame with new column added.
-    
+
     Examples
     --------
     >>> # Get interpolated series
     >>> flow_aligned = interpolate_to_column(df, "Sample flow", "DeltaC pressure")
-    >>> 
+    >>>
     >>> # Add as new column
     >>> df = interpolate_to_column(df, "Sample flow", "DeltaC pressure", new_col="Sample flow (aligned)")
-    >>> 
+    >>>
     >>> # Use for calculations
     >>> flow_interp = interpolate_to_column(df, "Sample flow", "DeltaC pressure")
     >>> df["pressure_per_flow"] = df["DeltaC pressure"].dropna() / flow_interp
     """
     # Get non-NaN indices from target column
     target_index = df[target_col].dropna().index.values
-    
+
     # Get source data (drop NaN)
     source_series = df[source_col].dropna()
     source_index = source_series.index.values
     source_values = source_series.values
-    
+
     # Interpolate source values to target indices
     if method == 'linear':
         # Handle fill_value for np.interp
@@ -760,13 +753,13 @@ def interpolate_to_column(
     else:
         # Use scipy for other interpolation methods
         from scipy.interpolate import interp1d
-        f = interp1d(source_index, source_values, kind=method, 
+        f = interp1d(source_index, source_values, kind=method,
                      bounds_error=False, fill_value=fill_value)
         interpolated = f(target_index)
-    
+
     # Create output series
     result_series = pd.Series(interpolated, index=target_index, name=source_col)
-    
+
     if new_col is not None:
         # Add as new column to dataframe
         df = df.copy()
@@ -776,9 +769,3 @@ def interpolate_to_column(
     else:
         return result_series
 
-Add flexible matching modes to get_fracs_between_logs function
-
-Introduce match_mode parameter supporting "closest", "next", and "previous"
-strategies for matching fractions to log events. The parameter accepts both
-a single mode string (applies to both start and end) or a list of two modes
-(different modes for start and end). Also remove debug print statements.
