@@ -479,7 +479,8 @@ def get_between_logs(full_log_df: pd.DataFrame, start_end_text: list[str], looku
     associated numeric values. Useful for isolating chromatographic or process segments
     between two event markers in log data.
     """
-    edges = list(map(lambda pattern_str: full_log_df[full_log_df[lookup_col].str.contains(pattern_str, case=False)][return_col].values[0], start_end_text))
+	start_end = list(map(lambda pattern_str: full_log_df[full_log_df[lookup_col].str.contains(pattern_str, case=False)][return_col].values[0], start_end_text))
+	edges = [float(start_end[0]), float(start_end[1])]
     return edges
 
 
