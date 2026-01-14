@@ -10,92 +10,92 @@ import numpy as np
 import xml.etree.ElementTree as ET
 
 def get_series_from_data_dict(data_dictionary, target_key, data_key_list):
-    try:
-        # select the first injection as the injection timestamp
-        inject_timestamp = data_dictionary[target_key]["Injection"]["data"][-1][0]
-    except KeyError:
-        inject_timestamp = 0
+	try:
+		# select the first injection as the injection timestamp
+		inject_timestamp = data_dictionary[target_key]["Injection"]["data"][-1][0]
+	except KeyError:
+		inject_timestamp = 0
 
-    data_series_list = []
-    for data_key in data_key_list:
-        data_array = np.array(data_dictionary[target_key][data_key]["data"]).astype(float)
-        data_series = pd.Series(data=data_array[:, 1], index=data_array[:, 0])
-        # remove duplicates
-        data_series = data_series[~data_series.index.duplicated()]
-        # offset by the infection_timestamp
-        data_series.index -= inject_timestamp
+	data_series_list = []
+	for data_key in data_key_list:
+		data_array = np.array(data_dictionary[target_key][data_key]["data"]).astype(float)
+		data_series = pd.Series(data=data_array[:, 1], index=data_array[:, 0])
+		# remove duplicates
+		data_series = data_series[~data_series.index.duplicated()]
+		# offset by the infection_timestamp
+		data_series.index -= inject_timestamp
 
-        data_series_list.append(data_series)
+		data_series_list.append(data_series)
 
-    df = pd.concat(data_series_list, axis=1)
-    df.columns = data_key_list
-    return df
+	df = pd.concat(data_series_list, axis=1)
+	df.columns = data_key_list
+	return df
 
 
 def import_xml_as_df(file_path: (str | Path), data_key_list: list = None, index: np.ndarray = None) -> pd.DataFrame:
-    """
-    Import the contents of a Unicorn Res/zip file into a pd.Dataframe
+	"""
+	Import the contents of a Unicorn Res/zip file into a pd.Dataframe
 
-    Parameters
-    ----------
-    file_path : str or Path, Path to the res or zip file.
-    data_key_list: list, optional, Keys to include in the DataFrame. Default: ["Cond", "UV", "Conc B"]
-    index: np.ndarray, optional, Array of shape (1, ), to be used as index in the returned pd.DataFrame.
-        Units are the same as the original data.
+	Parameters
+	----------
+	file_path : str or Path, Path to the res or zip file.
+	data_key_list: list, optional, Keys to include in the DataFrame. Default: ["Cond", "UV", "Conc B"]
+	index: np.ndarray, optional, Array of shape (1, ), to be used as index in the returned pd.DataFrame.
+		Units are the same as the original data.
 
-    Returns
-    -------
-    dataframe : pd.DataFrame
+	Returns
+	-------
+	dataframe : pd.DataFrame
 
-    """
-    if data_key_list is None:
-        data_key_list = ["Cond", "UV", "Conc B"]
+	"""
+	if data_key_list is None:
+		data_key_list = ["Cond", "UV", "Conc B"]
 
-    data_dictionary = PcUni6(file_path)
-    data_dictionary.load_all_xml()
+	data_dictionary = PcUni6(file_path)
+	data_dictionary.load_all_xml()
 
-    target_key_list = [
-        key for key in data_dictionary
-        if "events" not in key
-           and "Cond" in key
-           and any(s.lower() in key.lower() for s in ["Tracer", "Injection", "Chrom", "Breakthrough", "Elution"])
-           and any(["UV" in sub_key for sub_key in data_dictionary[key]])
-    ]
+	target_key_list = [
+		key for key in data_dictionary
+		if "events" not in key
+		   and "Cond" in key
+		   and any(s.lower() in key.lower() for s in ["Tracer", "Injection", "Chrom", "Breakthrough", "Elution"])
+		   and any(["UV" in sub_key for sub_key in data_dictionary[key]])
+	]
 
-    if any("breakthrough" in key.lower() for key in target_key_list):
-        target_key_list = [key for key in target_key_list if "breakthrough" in key.lower()]
+	if any("breakthrough" in key.lower() for key in target_key_list):
+		target_key_list = [key for key in target_key_list if "breakthrough" in key.lower()]
 
-    if len(target_key_list) == 0:
-        return None
+	if len(target_key_list) == 0:
+		return None
 
-    if "UV" not in data_dictionary[target_key_list[0]]:
-        data_key_list.remove("UV")
-        data_key_list.extend([sub_key for sub_key in data_dictionary[target_key_list[0]] if
-                              ("UV" in sub_key and not "cell path" in sub_key)])
+	if "UV" not in data_dictionary[target_key_list[0]]:
+		data_key_list.remove("UV")
+		data_key_list.extend([sub_key for sub_key in data_dictionary[target_key_list[0]] if
+							  ("UV" in sub_key and not "cell path" in sub_key)])
 
-    series_list = [get_series_from_data_dict(data_dictionary, chrom, data_key_list) for chrom in target_key_list]
+	series_list = [get_series_from_data_dict(data_dictionary, chrom, data_key_list) for chrom in target_key_list]
 
-    if index is None:
-        index = np.linspace(series_list[0].index.min(), series_list[0].index.max(), 100).round(3)
+	if index is None:
+		index = np.linspace(series_list[0].index.min(), series_list[0].index.max(), 100).round(3)
 
-    # align and unify the index
-    index = index[index < series_list[0].index.max()]
+	# align and unify the index
+	index = index[index < series_list[0].index.max()]
 
-    if len(data_key_list) > 1:
-        column_names = [(target_key, data_key) for target_key in target_key_list for data_key in data_key_list]
-        column_names += [("temporary_insert", 0)]
-    else:
-        column_names = target_key_list
-        column_names += ["temporary_insert"]
+	if len(data_key_list) > 1:
+		column_names = [(target_key, data_key) for target_key in target_key_list for data_key in data_key_list]
+		column_names += [("temporary_insert", 0)]
+	else:
+		column_names = target_key_list
+		column_names += ["temporary_insert"]
 
-    # combine datapoints into one DataFrame and interpolate onto the unified index
-    series_list.append(pd.Series(data=np.NaN, index=index))
-    dataframe = pd.concat(series_list, axis=1, join="outer")
-    dataframe.columns = column_names
-    dataframe = dataframe.interpolate("index", )
-    dataframe = dataframe.loc[index, column_names[:-1]]
+	# combine datapoints into one DataFrame and interpolate onto the unified index
+	series_list.append(pd.Series(data=np.NaN, index=index))
+	dataframe = pd.concat(series_list, axis=1, join="outer")
+	dataframe.columns = column_names
+	dataframe = dataframe.interpolate("index", )
+	dataframe = dataframe.loc[index, column_names[:-1]]
 
-    return dataframe
+	return dataframe
 
 
 def get_metadata(data_dictionary: PcUni6|dict )-> dict[str, str]:
@@ -122,7 +122,7 @@ def get_metadata(data_dictionary: PcUni6|dict )-> dict[str, str]:
 		The function parses the XML content in xml_data['Result.xml'] and extracts relevant metadata fields.
 		If a field is not found, its value will be None or 'not found'.
 	"""
-    
+	
 	# Parse the XML data from xml_data['Result.xml']
 	xml_data = data_dictionary
 	xml_data.load()
@@ -205,62 +205,62 @@ def get_metadata(data_dictionary: PcUni6|dict )-> dict[str, str]:
 
 
 def get_chrom_from_data_dict(data_dictionary: PcUni6|dict, chromatogram_str, traces_list) -> pd.DataFrame:
-    """""
-    extract the chormatogram data from a data_dictionary for a given chromatogram_str and traces_list
-    works one chromatogram at a time
-    
-    Inputs:
+	"""""
+	extract the chormatogram data from a data_dictionary for a given chromatogram_str and traces_list
+	works one chromatogram at a time
+	
+	Inputs:
 		data_dictionary (dict): dictionary containing Unicorn results with all chromatograms, as prepared by PcUni6()
 		chromatogram_str (str): string representing the chromatogram name to extract data from
 		traces_list (list): list of traces to extract from the chromatogram
-        
-    Outputs:
+		
+	Outputs:
 		df (pd.DataFrame): DataFrame containing the data for the given chromatogram and traces
-        
+		
 	"""""
 	
-    inject_timestamp = 0
-    
-    traces_not_in_chromatogram: list[str] = [] # needed to handle case where some traces are only present in some chormatograms
-    data_series_list = []
+	inject_timestamp = 0
+	
+	traces_not_in_chromatogram: list[str] = [] # needed to handle case where some traces are only present in some chormatograms
+	data_series_list = []
 
-    for data_key in traces_list:
-        if not(any(key.lower() == data_key.lower() for key in data_dictionary[chromatogram_str].keys())):
-            traces_not_in_chromatogram.append(data_key)
-            continue
-        
-        data_array = np.array(data_dictionary[chromatogram_str][data_key]["data"])
-        if data_array.size == 0:
-            x_data, y_data = np.array([np.nan]), np.array([np.nan])
-        else:
-            x_data = data_array[:, 0].astype(float)
-            y_data = data_array[:, 1]
-        # data_series = pd.Series(data=y_data, index=x_data)
-        try:
-            data_series = pd.Series(data=y_data, index=x_data, dtype=float)
-        except ValueError:
-            data_series = pd.Series(data=y_data, index=x_data, dtype=pd.StringDtype())
-        # remove duplicates
-        data_series = data_series[~data_series.index.duplicated()]
-        
-        # offset by the injection_timestamp
-        data_series.index -= inject_timestamp
+	for data_key in traces_list:
+		if not(any(key.lower() == data_key.lower() for key in data_dictionary[chromatogram_str].keys())):
+			traces_not_in_chromatogram.append(data_key)
+			continue
+		
+		data_array = np.array(data_dictionary[chromatogram_str][data_key]["data"])
+		if data_array.size == 0:
+			x_data, y_data = np.array([np.nan]), np.array([np.nan])
+		else:
+			x_data = data_array[:, 0].astype(float)
+			y_data = data_array[:, 1]
+		# data_series = pd.Series(data=y_data, index=x_data)
+		try:
+			data_series = pd.Series(data=y_data, index=x_data, dtype=float)
+		except ValueError:
+			data_series = pd.Series(data=y_data, index=x_data, dtype=pd.StringDtype())
+		# remove duplicates
+		data_series = data_series[~data_series.index.duplicated()]
+		
+		# offset by the injection_timestamp
+		data_series.index -= inject_timestamp
 
-        # add 'True' to the Injection data as mark should there be multiple injections
-        if data_key == "Injection":
-            data_series.replace(np.nan, True, inplace=True)
+		# add 'True' to the Injection data as mark should there be multiple injections
+		if data_key == "Injection":
+			data_series.replace(np.nan, True, inplace=True)
 
-        data_series_list.append(data_series)
+		data_series_list.append(data_series)
 
-    try: 
-        df = pd.concat(data_series_list, axis=1)
-    except ValueError: # case where only one trace (besides "Injection") is present
-        pass
-    
+	try: 
+		df = pd.concat(data_series_list, axis=1)
+	except ValueError: # case where only one trace (besides "Injection") is present
+		pass
+	
 	# removes all all elems of 'traces_not_in_chromatogram' from 'traces_list' in case-insensitive manner
-    traces_list_new = [t for t in traces_list if not any(t.lower() == rem.lower() for rem in traces_not_in_chromatogram)]
-    df.columns = traces_list_new
-    return df
+	traces_list_new = [t for t in traces_list if not any(t.lower() == rem.lower() for rem in traces_not_in_chromatogram)]
+	df.columns = traces_list_new
+	return df
 
 
 def get_chrom(data_dictionary: PcUni6|dict, reduce_interpolate: bool = False, **kwargs) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -275,7 +275,7 @@ def get_chrom(data_dictionary: PcUni6|dict, reduce_interpolate: bool = False, **
 		chromatograms (list[int]): list of chromatogram names to import. If not provided, all chromatograms will be used.
 		traces (list[str]): list of traces to import. If not provided, all traces will be used.
 		interpolate_threshold (int): to control interpolation behavior, chromatograms with less rows than this will not be interpolated.
-        which_injection (int): which injection mark to use (0-indexed injection mark, -1 for last), default is first injeciton mark
+		which_injection (int): which injection mark to use (0-indexed injection mark, -1 for last), default is first injeciton mark
 	
 	Output:
 		chromatogram_df (pd.DataFrame): DataFrame containing all chromatograms with aligned data
@@ -347,8 +347,8 @@ def get_full_log(data_dictionary: PcUni6|dict, **kwargs) -> pd.DataFrame:
 	
 	Inputs:
 		data_dictionary (dict): dictionary containing Unicorn results with all chromatograms, as prepared by PcUni6()
-        kwargs (dict)
-        which_injection (int): which injection mark to use (0-indexed injection mark, -1 for last), default is first injeciton mark
+		kwargs (dict)
+		which_injection (int): which injection mark to use (0-indexed injection mark, -1 for last), default is first injeciton mark
 	Outputs:
 		full_log (pd.DataFrame): df with the full log
 
@@ -440,48 +440,48 @@ def get_frac_vol(log_df: pd.DataFrame)-> pd.DataFrame:
 
 
 def get_between_logs(full_log_df: pd.DataFrame, start_end_text: list[str], lookup_col: str = "EventFullText", return_col: str = "EventVolume"):
-    """
-    Extract values from a DataFrame corresponding to two log entries matching given text patterns.
+	"""
+	Extract values from a DataFrame corresponding to two log entries matching given text patterns.
 
-    recommended usage: <some_df>.loc[slice(*edges)] (volume coordinate expected in some_df.index)
-    
-    Parameters
-    ----------
-    full_log_df : pd.DataFrame
-        Log data containing at least the columns specified by `lookup_col` and `return_col`.
-    start_end_text : list of str
-        List of two string patterns (start and end markers) to locate within `lookup_col`.
-        The first match corresponds to the start event, and the second to the end event.
-    lookup_col : str, optional
-        Name of the column in which to search for `start_end_text` patterns.
-        Default is "EventFullText", alternatives are `EventText`, `EventType`, 
-        `EventSubType` and `InstructionFeedback`
-    return_col : str, optional
-        Name of the column from which to extract values corresponding to matched rows.
-        Default is "EventVolume"; alternative is `EventTime`
+	recommended usage: <some_df>.loc[slice(*edges)] (volume coordinate expected in some_df.index)
+	
+	Parameters
+	----------
+	full_log_df : pd.DataFrame
+		Log data containing at least the columns specified by `lookup_col` and `return_col`.
+	start_end_text : list of str
+		List of two string patterns (start and end markers) to locate within `lookup_col`.
+		The first match corresponds to the start event, and the second to the end event.
+	lookup_col : str, optional
+		Name of the column in which to search for `start_end_text` patterns.
+		Default is "EventFullText", alternatives are `EventText`, `EventType`, 
+		`EventSubType` and `InstructionFeedback`
+	return_col : str, optional
+		Name of the column from which to extract values corresponding to matched rows.
+		Default is "EventVolume"; alternative is `EventTime`
 
-    Returns
-    -------
-    edges : list of float
-        List containing the two extracted values (start and end) from `return_col`.
+	Returns
+	-------
+	edges : list of float
+		List containing the two extracted values (start and end) from `return_col`.
 
-    Raises
-    ------
-    IndexError
-        If no matching rows are found for either pattern.
-    KeyError
-        If `lookup_col` or `return_col` do not exist in `full_log_df`.
+	Raises
+	------
+	IndexError
+		If no matching rows are found for either pattern.
+	KeyError
+		If `lookup_col` or `return_col` do not exist in `full_log_df`.
 
-    Notes
-    -----
-    This function searches case-insensitively for each string pattern in `start_end_text`
-    within the specified column, retrieves the first match of each, and returns their
-    associated numeric values. Useful for isolating chromatographic or process segments
-    between two event markers in log data.
-    """
+	Notes
+	-----
+	This function searches case-insensitively for each string pattern in `start_end_text`
+	within the specified column, retrieves the first match of each, and returns their
+	associated numeric values. Useful for isolating chromatographic or process segments
+	between two event markers in log data.
+	"""
 	start_end = list(map(lambda pattern_str: full_log_df[full_log_df[lookup_col].str.contains(pattern_str, case=False)][return_col].values[0], start_end_text))
 	edges = [float(start_end[0]), float(start_end[1])]
-    return edges
+	return edges
 
 
 def get_fracs_between_logs(full_log_df: pd.DataFrame, frac_df: pd.DataFrame, start_end_text:list[str], match_mode: str | list[str] = "closest"):

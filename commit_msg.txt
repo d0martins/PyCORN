@@ -1,13 +1,10 @@
-## 1 ##
 
-git add .gitignore && git commit -m "Add commit_msg.txt to .gitignore" && git push
-
-## 2 ##
+git add commit_msg.txt && git commit -m "Add commit_msg.txt to .gitignore" && git push
 git add . && git commit -m "Change: remove get_start_end_frac() from utils.py" && git push
-
-
-## 3 ##
 change get_between_logs() in pycorn/utils.py:
 start_end = list(map(lambda pattern_str: full_log_df[full_log_df[lookup_col].str.contains(pattern_str, case=False)][return_col].values[0], start_end_text))
 edges = [float(start_end[0]), float(start_end[1])]
 return edges
+git add . && git commit -m "Change: enforce conversion to "python" float to avoid displaing [np.float64(13.0), ... ], which bacame default in NumPy>=2.0 in get_between_logs() in pycorn/utils.py" && git push
+
+## 1 ##
